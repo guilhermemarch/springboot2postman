@@ -90,7 +90,7 @@ class OpenApiFetcher {
             throw new InvalidOpenApiError('Missing or invalid "paths" field');
         }
 
-        this.logger.debug(`Valid ${spec.openapi || 'Swagger ' + spec.swagger} specification`);
+        this.logger.debug(`Valid ${spec.openapi || `Swagger ${  spec.swagger}`} specification`);
         return true;
     }
 }
