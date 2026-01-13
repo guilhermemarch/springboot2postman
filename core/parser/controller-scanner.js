@@ -67,17 +67,13 @@ class ControllerScanner {
 
         if (options.include) {
             const includePatterns = options.include.split(',').map(p => p.trim());
-            filtered = filtered.filter(file => {
-                return includePatterns.some(pattern => this.matchesPattern(file, pattern));
-            });
+            filtered = filtered.filter(file => includePatterns.some(pattern => this.matchesPattern(file, pattern)));
             this.logger.debug(`Include filter applied: ${filtered.length} files remaining`);
         }
 
         if (options.exclude) {
             const excludePatterns = options.exclude.split(',').map(p => p.trim());
-            filtered = filtered.filter(file => {
-                return !excludePatterns.some(pattern => this.matchesPattern(file, pattern));
-            });
+            filtered = filtered.filter(file => !excludePatterns.some(pattern => this.matchesPattern(file, pattern)));
             this.logger.debug(`Exclude filter applied: ${filtered.length} files remaining`);
         }
 
