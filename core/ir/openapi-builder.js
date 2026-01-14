@@ -76,7 +76,7 @@ class OpenApiBuilder {
         const parameter = {
             name: param.name,
             in: inLocation,
-            required: param.required || false,
+            required: param.required || inLocation === 'path',
             schema: this.buildSchema(param),
         };
 
@@ -112,7 +112,7 @@ class OpenApiBuilder {
     }
 
     buildRequestBody(requestBody) {
-        return {
+        const body = {
             required: requestBody.required || false,
             content: {
                 [requestBody.contentType || 'application/json']: {
@@ -120,6 +120,12 @@ class OpenApiBuilder {
                 },
             },
         };
+
+        if (requestBody.example) {
+            body.content[requestBody.contentType || 'application/json'].example = requestBody.example;
+        }
+
+        return body;
     }
 
     buildResponses(responses) {
@@ -132,12 +138,21 @@ class OpenApiBuilder {
                 description: response.description || 'Successful response',
             };
 
-            if (response.schema) {
-                responsesObj[statusCode].content = {
-                    [response.contentType || 'application/json']: {
-                        schema: response.schema,
-                    },
-                };
+            if (response.schema || response.example) {
+                const content = {};
+                const mediaType = response.contentType || 'application/json';
+
+                content[mediaType] = {};
+
+                if (response.schema) {
+                    content[mediaType].schema = response.schema;
+                }
+
+                if (response.example) {
+                    content[mediaType].example = response.example;
+                }
+
+                responsesObj[statusCode].content = content;
             }
         }
 
