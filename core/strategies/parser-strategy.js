@@ -3,9 +3,12 @@ const ControllerScanner = require('../parser/controller-scanner');
 const JavaFileParser = require('../parser/java-parser');
 const AnnotationExtractor = require('../parser/annotation-extractor');
 const TypeResolver = require('../parser/type-resolver');
+const DtoScanner = require('../parser/dto-scanner');
 const { createEmptyIR, createEndpoint, createParameter, createRequestBody, addEndpoint, setServerUrl } = require('../ir/models');
 const OpenApiBuilder = require('../ir/openapi-builder');
 const OpenApiConverter = require('../openapi/converter');
+const MockDataGenerator = require('../generator/mock-generator');
+const PostmanEnhancer = require('../postman/postman-enhancer');
 
 class ParserStrategy extends BaseStrategy {
     constructor(source, logger) {
@@ -14,8 +17,11 @@ class ParserStrategy extends BaseStrategy {
         this.javaParser = new JavaFileParser(logger);
         this.annotationExtractor = new AnnotationExtractor(logger);
         this.typeResolver = new TypeResolver(logger);
+        this.dtoScanner = new DtoScanner(logger);
         this.openApiBuilder = new OpenApiBuilder(logger);
         this.converter = new OpenApiConverter(logger);
+        this.mockGenerator = new MockDataGenerator(logger);
+        this.postmanEnhancer = new PostmanEnhancer(logger, this.mockGenerator);
     }
 
     async validate() {
@@ -37,6 +43,9 @@ class ParserStrategy extends BaseStrategy {
         }
 
         const concurrency = parseInt(options.concurrency, 10) || 5;
+
+        this.logger.updateSpinner('Scanning for DTOs...');
+        await this.dtoScanner.scanProject(this.source);
 
         this.logger.updateSpinner('Scanning for controllers...');
         const controllers = await this.scanner.findControllers(this.source, {
@@ -77,6 +86,9 @@ class ParserStrategy extends BaseStrategy {
         if (options.baseUrl) {
             collection = this.converter.applyBaseUrl(collection, options.baseUrl);
         }
+
+        this.logger.updateSpinner('Enhancing Postman collection...');
+        collection = this.postmanEnhancer.enhance(collection, options);
 
         return collection;
     }
@@ -167,7 +179,16 @@ class ParserStrategy extends BaseStrategy {
 
                 if (paramInfo) {
                     if (paramInfo.in === 'body') {
-                        endpoint.requestBody = createRequestBody(paramInfo.type, paramInfo.required);
+                        const requestBody = createRequestBody(paramInfo.type, paramInfo.required);
+
+                        const dtoFields = this.dtoScanner.inferDtoFields(paramInfo.type);
+                        requestBody.example = this.mockGenerator.generateRequestExample(
+                            paramInfo.type,
+                            dtoFields,
+                            endpointInfo.method
+                        );
+
+                        endpoint.requestBody = requestBody;
                     } else {
                         const parameter = createParameter(
                             paramInfo.name,
@@ -179,7 +200,7 @@ class ParserStrategy extends BaseStrategy {
                         const resolved = this.typeResolver.resolveType(paramInfo.type);
                         parameter.jsonType = resolved.type || 'string';
                         parameter.format = resolved.format;
-                        parameter.example = this.typeResolver.generateExample(paramInfo.type);
+                        parameter.example = this.mockGenerator.generateForField(paramInfo.name, paramInfo.type);
 
                         if (paramInfo.defaultValue !== undefined) {
                             parameter.defaultValue = paramInfo.defaultValue;
@@ -192,6 +213,7 @@ class ParserStrategy extends BaseStrategy {
 
             if (method.returnType && method.returnType !== 'void') {
                 const responseSchema = this.typeResolver.resolveType(method.returnType);
+                endpoint.responses = this.generateResponses(endpointInfo.method, method.returnType, fullPath);
                 endpoint.responses[0].schema = responseSchema;
             }
 
@@ -199,6 +221,105 @@ class ParserStrategy extends BaseStrategy {
         }
 
         return endpoints;
+    }
+
+    generateResponses(httpMethod, returnType, path) {
+        const responses = [];
+        const entityName = this.extractEntityName(returnType);
+        const dtoFields = this.dtoScanner.inferDtoFields(entityName);
+
+        switch (httpMethod) {
+            case 'GET':
+                if (returnType.includes('List<') || returnType.includes('Collection<')) {
+                    responses.push({
+                        status: 200,
+                        description: 'Successful response',
+                        contentType: 'application/json',
+                        example: this.mockGenerator.generateListResponse(entityName, dtoFields),
+                    });
+                } else {
+                    responses.push({
+                        status: 200,
+                        description: 'Successful response',
+                        contentType: 'application/json',
+                        example: this.mockGenerator.generateResponseExample(entityName, dtoFields, 'GET'),
+                    });
+                    responses.push({
+                        status: 404,
+                        description: 'Not found',
+                        contentType: 'application/json',
+                        example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                    });
+                }
+                break;
+
+            case 'POST':
+                responses.push({
+                    status: 201,
+                    description: 'Created successfully',
+                    contentType: 'application/json',
+                    example: this.mockGenerator.generateResponseExample(entityName, dtoFields, 'POST'),
+                });
+                responses.push({
+                    status: 400,
+                    description: 'Bad request',
+                    contentType: 'application/json',
+                    example: this.mockGenerator.generateErrorResponse(400, 'Validation failed', path),
+                });
+                break;
+
+            case 'PUT':
+            case 'PATCH':
+                responses.push({
+                    status: 200,
+                    description: 'Updated successfully',
+                    contentType: 'application/json',
+                    example: this.mockGenerator.generateResponseExample(entityName, dtoFields, httpMethod),
+                });
+                responses.push({
+                    status: 404,
+                    description: 'Not found',
+                    contentType: 'application/json',
+                    example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                });
+                break;
+
+            case 'DELETE':
+                responses.push({
+                    status: 204,
+                    description: 'Deleted successfully',
+                    contentType: 'application/json',
+                });
+                responses.push({
+                    status: 404,
+                    description: 'Not found',
+                    contentType: 'application/json',
+                    example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                });
+                break;
+
+            default:
+                responses.push({
+                    status: 200,
+                    description: 'Successful response',
+                    contentType: 'application/json',
+                });
+        }
+
+        return responses;
+    }
+
+    extractEntityName(returnType) {
+        const name = returnType
+            .replace(/ResponseEntity</, '')
+            .replace(/List</, '')
+            .replace(/Set</, '')
+            .replace(/Collection</, '')
+            .replace(/Optional</, '')
+            .replace(/>/g, '')
+            .trim();
+
+        return name || 'Entity';
     }
 
     buildPath(basePath, endpointPath) {
@@ -218,11 +339,11 @@ class ParserStrategy extends BaseStrategy {
         return fullPath.startsWith('/') ? fullPath : `/${fullPath}`;
     }
 
-    generateEndpointName(methodName, httpMethod) {
+    generateEndpointName(methodName, _httpMethod) {
         const words = methodName.replace(/([A-Z])/g, ' $1').trim();
         const titleCase = words.charAt(0).toUpperCase() + words.slice(1);
 
-        return `${httpMethod} ${titleCase}`;
+        return titleCase;
     }
 }
 
