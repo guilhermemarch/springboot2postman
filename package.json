@@ -1,6 +1,6 @@
 {
   "name": "springboot2postman",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Generate Postman collections automatically from any Spring Boot project — with or without Swagger",
   "main": "cli/index.js",
   "bin": {
@@ -34,16 +34,16 @@
     "rest",
     "cli"
   ],
-  "author": "SpringTools Team <dev@springtools.dev>",
+  "author": "Guilherme March <guilhermemarch>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/springtools/springboot2postman.git"
+    "url": "https://github.com/guilhermemarch/springboot2postman.git"
   },
   "bugs": {
-    "url": "https://github.com/springtools/springboot2postman/issues"
+    "url": "https://github.com/guilhermemarch/springboot2postman/issues"
   },
-  "homepage": "https://github.com/springtools/springboot2postman#readme",
+  "homepage": "https://github.com/guilhermemarch/springboot2postman#readme",
   "engines": {
     "node": ">=16.0.0",
     "npm": ">=7.0.0"
