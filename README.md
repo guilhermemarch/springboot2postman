@@ -102,6 +102,3 @@ When no OpenAPI spec is available, the tool:
 - Node.js 16.0.0 or higher
 - npm 7.0.0 or higher
 
-## License
-
-MIT
