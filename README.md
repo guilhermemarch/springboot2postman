@@ -19,13 +19,13 @@ Generate Postman collections automatically from any Spring Boot project — with
 ## Installation
 
 ```bash
-npm install -g @springtools/springboot2postman
+npm install -g springboot2postman
 ```
 
 Or use directly with npx:
 
 ```bash
-npx @springtools/springboot2postman --project ./my-spring-app
+npx springboot2postman --project ./my-spring-app
 ```
 
 ## Quick Start
