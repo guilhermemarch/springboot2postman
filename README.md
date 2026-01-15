@@ -2,7 +2,6 @@
 
 Generate Postman collections automatically from any Spring Boot project — with or without OpenAPI/Swagger.
 
-[![npm version](https://img.shields.io/npm/v/springboot2postman?style=flat-square)](https://www.npmjs.com/package/springboot2postman)
 [![npm weekly downloads](https://img.shields.io/npm/dw/springboot2postman?style=for-the-badge)](https://www.npmjs.com/package/springboot2postman)
 
 
