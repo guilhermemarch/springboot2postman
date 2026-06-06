@@ -29,13 +29,13 @@ class PostmanEnhancer {
         ];
 
         for (const { key, value, type } of defaultVars) {
-            if (!collection.variable.find(v => v.key === key)) {
+            if (!collection.variable.find((v) => v.key === key)) {
                 collection.variable.push({ key, value, type });
             }
         }
 
         for (const [key, value] of this.collectionVariables) {
-            if (!collection.variable.find(v => v.key === key)) {
+            if (!collection.variable.find((v) => v.key === key)) {
                 collection.variable.push({ key, value, type: 'string' });
             }
         }
@@ -51,7 +51,7 @@ class PostmanEnhancer {
                 } else if (item.request) {
                     item.request.header = item.request.header || [];
 
-                    if (!item.request.header.find(h => h.key === 'Accept')) {
+                    if (!item.request.header.find((h) => h.key === 'Accept')) {
                         item.request.header.push({
                             key: 'Accept',
                             value: 'application/json',
@@ -59,7 +59,10 @@ class PostmanEnhancer {
                         });
                     }
 
-                    if (item.request.body && !item.request.header.find(h => h.key === 'Content-Type')) {
+                    if (
+                        item.request.body &&
+                        !item.request.header.find((h) => h.key === 'Content-Type')
+                    ) {
                         item.request.header.push({
                             key: 'Content-Type',
                             value: 'application/json',
@@ -67,7 +70,7 @@ class PostmanEnhancer {
                         });
                     }
 
-                    if (!item.request.header.find(h => h.key === 'Authorization')) {
+                    if (!item.request.header.find((h) => h.key === 'Authorization')) {
                         item.request.header.push({
                             key: 'Authorization',
                             value: 'Bearer {{token}}',
@@ -108,10 +111,10 @@ class PostmanEnhancer {
         if (!url.path) return;
 
         const variableMapping = {
-            'id': this.guessVariableNameFromContext(requestName),
-            'userId': 'userId',
-            'productId': 'productId',
-            'orderId': 'orderId',
+            id: this.guessVariableNameFromContext(requestName),
+            userId: 'userId',
+            productId: 'productId',
+            orderId: 'orderId',
         };
 
         for (let i = 0; i < url.path.length; i++) {
@@ -132,11 +135,12 @@ class PostmanEnhancer {
         if (url.variable) {
             for (const variable of url.variable) {
                 const varName = variableMapping[variable.key] || variable.key;
-                variable.value = `{{${varName}}}`;
 
                 if (!this.collectionVariables.has(varName)) {
                     this.collectionVariables.set(varName, '1');
                 }
+
+                variable.value = this.collectionVariables.get(varName);
             }
         }
     }
@@ -193,7 +197,7 @@ class PostmanEnhancer {
     }
 
     sortRequests(collection) {
-        const methodOrder = { 'GET': 1, 'POST': 2, 'PUT': 3, 'PATCH': 4, 'DELETE': 5 };
+        const methodOrder = { GET: 1, POST: 2, PUT: 3, PATCH: 4, DELETE: 5 };
 
         const sortItems = (items) => {
             for (const item of items) {
@@ -210,9 +214,11 @@ class PostmanEnhancer {
 
                         if (orderA !== orderB) return orderA - orderB;
 
-                        const isListA = a.name?.toLowerCase().includes('list') ||
+                        const isListA =
+                            a.name?.toLowerCase().includes('list') ||
                             a.name?.toLowerCase().includes('all');
-                        const isListB = b.name?.toLowerCase().includes('list') ||
+                        const isListB =
+                            b.name?.toLowerCase().includes('list') ||
                             b.name?.toLowerCase().includes('all');
 
                         if (isListA && !isListB) return -1;
@@ -248,7 +254,7 @@ class PostmanEnhancer {
                     const responses = this.generateResponses(method, path, entityName);
 
                     for (const response of responses) {
-                        if (!item.response.find(r => r.name === response.name)) {
+                        if (!item.response.find((r) => r.name === response.name)) {
                             item.response.push(response);
                         }
                     }
@@ -273,7 +279,10 @@ class PostmanEnhancer {
     guessEntityName(requestName) {
         const words = requestName.split(/\s+/);
         for (const word of words) {
-            if (word.length > 2 && !['by', 'ID', 'the', 'Get', 'Create', 'Update', 'Delete', 'List'].includes(word)) {
+            if (
+                word.length > 2 &&
+                !['by', 'ID', 'the', 'Get', 'Create', 'Update', 'Delete', 'List'].includes(word)
+            ) {
                 return word;
             }
         }
@@ -284,8 +293,16 @@ class PostmanEnhancer {
         const responses = [];
         const successExample = this.mockGenerator.generateResponseExample(entityName, null, method);
         const listExample = this.mockGenerator.generateListResponse(entityName, null, 3);
-        const errorExample = this.mockGenerator.generateErrorResponse(400, 'Validation failed', path);
-        const notFoundExample = this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path);
+        const errorExample = this.mockGenerator.generateErrorResponse(
+            400,
+            'Validation failed',
+            path,
+        );
+        const notFoundExample = this.mockGenerator.generateErrorResponse(
+            404,
+            `${entityName} not found`,
+            path,
+        );
 
         switch (method) {
             case 'GET':
@@ -324,9 +341,7 @@ class PostmanEnhancer {
             status,
             code: status,
             _postman_previewlanguage: 'json',
-            header: [
-                { key: 'Content-Type', value: 'application/json' },
-            ],
+            header: [{ key: 'Content-Type', value: 'application/json' }],
         };
 
         if (body !== null) {

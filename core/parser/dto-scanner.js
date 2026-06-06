@@ -27,7 +27,7 @@ class DtoScanner {
         const files = new Set();
         for (const pattern of patterns) {
             const matches = await glob(pattern, { nodir: true });
-            matches.forEach(f => files.add(f));
+            matches.forEach((f) => files.add(f));
         }
 
         this.logger.debug(`Found ${files.size} potential DTO files`);
@@ -66,7 +66,8 @@ class DtoScanner {
     extractFields(content) {
         const fields = [];
 
-        const fieldPattern = /(?:private|protected|public)\s+(?:final\s+)?(\w+(?:<[^>]+>)?)\s+(\w+)\s*[;=]/g;
+        const fieldPattern =
+            /(?:private|protected|public)\s+(?:final\s+)?(\w+(?:<[^>]+>)?)\s+(\w+)\s*[;=]/g;
 
         let match;
         while ((match = fieldPattern.exec(content)) !== null) {
@@ -93,10 +94,17 @@ class DtoScanner {
             return this.dtoCache.get(name);
         }
 
-        const baseName = name.replace(/DTO$|Dto$|Request$|Response$/, '');
-        for (const [key, dto] of this.dtoCache) {
-            if (key.startsWith(baseName)) {
-                return dto;
+        const suffixMatch = name.match(/^(.+?)(DTO|Dto|Request|Response)$/);
+        const baseName = suffixMatch ? suffixMatch[1] : name;
+
+        if (this.dtoCache.has(baseName)) {
+            return this.dtoCache.get(baseName);
+        }
+
+        for (const suffix of ['DTO', 'Dto', 'Request', 'Response']) {
+            const candidate = `${baseName}${suffix}`;
+            if (this.dtoCache.has(candidate)) {
+                return this.dtoCache.get(candidate);
             }
         }
 
@@ -150,10 +158,14 @@ class DtoScanner {
     }
 
     generateSchemaFromDto(dto) {
+        return this.generateSchemaFromFields(dto.fields);
+    }
+
+    generateSchemaFromFields(fields) {
         const properties = {};
         const required = [];
 
-        for (const field of dto.fields) {
+        for (const field of fields) {
             properties[field.name] = this.fieldToJsonSchema(field);
             if (field.required) {
                 required.push(field.name);
@@ -169,21 +181,21 @@ class DtoScanner {
 
     fieldToJsonSchema(field) {
         const typeMap = {
-            'String': { type: 'string' },
-            'Integer': { type: 'integer' },
-            'int': { type: 'integer' },
-            'Long': { type: 'integer', format: 'int64' },
-            'long': { type: 'integer', format: 'int64' },
-            'Double': { type: 'number', format: 'double' },
-            'double': { type: 'number', format: 'double' },
-            'Float': { type: 'number', format: 'float' },
-            'float': { type: 'number', format: 'float' },
-            'BigDecimal': { type: 'number' },
-            'Boolean': { type: 'boolean' },
-            'boolean': { type: 'boolean' },
-            'LocalDate': { type: 'string', format: 'date' },
-            'LocalDateTime': { type: 'string', format: 'date-time' },
-            'UUID': { type: 'string', format: 'uuid' },
+            String: { type: 'string' },
+            Integer: { type: 'integer' },
+            int: { type: 'integer' },
+            Long: { type: 'integer', format: 'int64' },
+            long: { type: 'integer', format: 'int64' },
+            Double: { type: 'number', format: 'double' },
+            double: { type: 'number', format: 'double' },
+            Float: { type: 'number', format: 'float' },
+            float: { type: 'number', format: 'float' },
+            BigDecimal: { type: 'number' },
+            Boolean: { type: 'boolean' },
+            boolean: { type: 'boolean' },
+            LocalDate: { type: 'string', format: 'date' },
+            LocalDateTime: { type: 'string', format: 'date-time' },
+            UUID: { type: 'string', format: 'uuid' },
         };
 
         const baseType = field.type.replace(/<.*>/, '');

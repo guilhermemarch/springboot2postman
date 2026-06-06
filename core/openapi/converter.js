@@ -10,11 +10,10 @@ class OpenApiConverter {
         this.logger.debug('Converting OpenAPI to Postman Collection...');
 
         const conversionOptions = {
-            folderStrategy: 'Tags',
-            requestParametersResolution: 'Example',
-            exampleParametersResolution: 'Example',
-            includeAuthInfoInExample: true,
-            ...options,
+            folderStrategy: options.folderStrategy || 'Tags',
+            requestParametersResolution: options.requestParametersResolution || 'Example',
+            exampleParametersResolution: options.exampleParametersResolution || 'Example',
+            includeAuthInfoInExample: options.includeAuthInfoInExample !== false,
         };
 
         return new Promise((resolve, reject) => {
@@ -27,14 +26,16 @@ class OpenApiConverter {
                     }
 
                     if (!result.result) {
-                        return reject(new ConversionError(result.reason || 'Unknown conversion error'));
+                        return reject(
+                            new ConversionError(result.reason || 'Unknown conversion error'),
+                        );
                     }
 
                     const collection = result.output[0].data;
 
                     this.logger.debug(`Conversion successful: ${collection.info.name}`);
                     resolve(collection);
-                }
+                },
             );
         });
     }
@@ -48,7 +49,7 @@ class OpenApiConverter {
             collection.variable = [];
         }
 
-        const baseUrlVar = collection.variable.find(v => v.key === 'baseUrl');
+        const baseUrlVar = collection.variable.find((v) => v.key === 'baseUrl');
         if (baseUrlVar) {
             baseUrlVar.value = baseUrl;
         } else {

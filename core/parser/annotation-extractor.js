@@ -12,7 +12,7 @@ class AnnotationExtractor {
         return '';
     }
 
-    extractEndpointInfo(methodAnnotations) {
+    extractEndpointInfos(methodAnnotations) {
         const mappingAnnotations = [
             'GetMapping',
             'PostMapping',
@@ -23,41 +23,59 @@ class AnnotationExtractor {
         ];
 
         for (const annotation of methodAnnotations) {
-            if (mappingAnnotations.includes(annotation.name)) {
-                const path = this.extractValueFromAnnotation(annotation);
-                const method = this.getHttpMethod(annotation.name, annotation.value);
-
-                return {
-                    method,
-                    path,
-                    annotation: annotation.name,
-                };
+            if (!mappingAnnotations.includes(annotation.name)) {
+                continue;
             }
+
+            const path = this.extractValueFromAnnotation(annotation);
+            const methods = this.getHttpMethods(annotation.name, annotation.value);
+
+            return methods.map((method) => ({
+                method,
+                path,
+                annotation: annotation.name,
+            }));
         }
 
-        return null;
+        return [];
     }
 
-    getHttpMethod(annotationName, annotationValue) {
-        const mapping = {
-            'GetMapping': 'GET',
-            'PostMapping': 'POST',
-            'PutMapping': 'PUT',
-            'DeleteMapping': 'DELETE',
-            'PatchMapping': 'PATCH',
-            'RequestMapping': 'GET',
-        };
-
-        let method = mapping[annotationName];
-
-        if (annotationName === 'RequestMapping' && annotationValue) {
-            const methodMatch = annotationValue.match(/method\s*=\s*RequestMethod\.(\w+)/);
-            if (methodMatch) {
-                method = methodMatch[1].toUpperCase();
+    getHttpMethods(annotationName, annotationValue) {
+        if (annotationName === 'RequestMapping') {
+            const explicitMethods = this.parseRequestMappingMethods(annotationValue);
+            if (explicitMethods.length > 0) {
+                return explicitMethods;
             }
+            return ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
         }
 
-        return method;
+        return [this.getHttpMethod(annotationName)];
+    }
+
+    getHttpMethod(annotationName) {
+        const mapping = {
+            GetMapping: 'GET',
+            PostMapping: 'POST',
+            PutMapping: 'PUT',
+            DeleteMapping: 'DELETE',
+            PatchMapping: 'PATCH',
+        };
+
+        return mapping[annotationName] || 'GET';
+    }
+
+    parseRequestMappingMethods(annotationValue) {
+        if (!annotationValue) {
+            return [];
+        }
+
+        const methods = new Set();
+        const matches = annotationValue.matchAll(/RequestMethod\.(\w+)/g);
+        for (const match of matches) {
+            methods.add(match[1].toUpperCase());
+        }
+
+        return [...methods];
     }
 
     extractValueFromAnnotation(annotation) {
@@ -85,44 +103,78 @@ class AnnotationExtractor {
         return '';
     }
 
-    extractParameterInfo(paramAnnotations, paramName, paramType) {
+    extractParameterInfos(paramAnnotations, paramName, paramType) {
         for (const annotation of paramAnnotations) {
-            switch (annotation.name) {
-                case 'PathVariable':
-                    return {
-                        in: 'path',
-                        name: this.extractParamName(annotation, paramName),
-                        required: true,
-                        type: paramType,
-                    };
-
-                case 'RequestParam':
-                    return {
-                        in: 'query',
-                        name: this.extractParamName(annotation, paramName),
-                        required: this.extractRequired(annotation),
-                        type: paramType,
-                        defaultValue: this.extractDefaultValue(annotation),
-                    };
-
-                case 'RequestBody':
-                    return {
-                        in: 'body',
-                        type: paramType,
-                        required: !annotation.raw.includes('required = false'),
-                    };
-
-                case 'RequestHeader':
-                    return {
-                        in: 'header',
-                        name: this.extractParamName(annotation, paramName),
-                        required: this.extractRequired(annotation),
-                        type: paramType,
-                    };
+            const info = this.extractParameterInfo(annotation, paramName, paramType);
+            if (info) {
+                return [info];
             }
         }
 
-        return null;
+        if (this.isPageableType(paramType)) {
+            return this.createPageableParameters();
+        }
+
+        return [];
+    }
+
+    extractParameterInfo(annotation, paramName, paramType) {
+        switch (annotation.name) {
+            case 'PathVariable':
+                return {
+                    in: 'path',
+                    name: this.extractParamName(annotation, paramName),
+                    required: true,
+                    type: paramType,
+                };
+
+            case 'RequestParam':
+                return {
+                    in: 'query',
+                    name: this.extractParamName(annotation, paramName),
+                    required: this.extractRequired(annotation),
+                    type: paramType,
+                    defaultValue: this.extractDefaultValue(annotation),
+                };
+
+            case 'RequestBody':
+                return {
+                    in: 'body',
+                    type: paramType,
+                    required: !annotation.raw.includes('required = false'),
+                };
+
+            case 'RequestHeader':
+                return {
+                    in: 'header',
+                    name: this.extractParamName(annotation, paramName),
+                    required: this.extractRequired(annotation),
+                    type: paramType,
+                };
+
+            case 'ModelAttribute':
+                return {
+                    in: 'query',
+                    name: this.extractParamName(annotation, paramName),
+                    required: false,
+                    type: paramType,
+                };
+
+            default:
+                return null;
+        }
+    }
+
+    isPageableType(paramType) {
+        return paramType === 'Pageable' || paramType.endsWith('.Pageable');
+    }
+
+    createPageableParameters() {
+        return [
+            { in: 'query', name: 'page', required: false, type: 'Integer', defaultValue: '0' },
+            { in: 'query', name: 'size', required: false, type: 'Integer', defaultValue: '20' },
+            { in: 'query', name: 'sort', required: false, type: 'String' },
+        ];
     }
 
     extractParamName(annotation, defaultName) {
@@ -160,24 +212,6 @@ class AnnotationExtractor {
         }
 
         return undefined;
-    }
-
-    producesJson(methodAnnotations) {
-        for (const annotation of methodAnnotations) {
-            if (annotation.raw && annotation.raw.includes('application/json')) {
-                return true;
-            }
-        }
-        return true;
-    }
-
-    consumesJson(methodAnnotations) {
-        for (const annotation of methodAnnotations) {
-            if (annotation.raw && annotation.raw.includes('application/json')) {
-                return true;
-            }
-        }
-        return true;
     }
 }
 

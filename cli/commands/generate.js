@@ -1,15 +1,18 @@
 const Logger = require('../../lib/logger');
 const { writeFile } = require('../../lib/file-utils');
-const OpenApiStrategy = require('../../core/strategies/openapi-strategy');
-const { isUrl } = require('../../lib/file-utils');
+const { detectStrategy, resolveProjectPath } = require('../../lib/strategy-detector');
+const { countResultEndpoints, getResultTitle } = require('../../lib/endpoint-counter');
+const { buildEnvironment } = require('../../core/postman/environment-builder');
+const { loadProjectConfig } = require('../../core/config/project-config');
 
 async function generate(options) {
     const logger = new Logger(options.verbose);
+    const projectPath = resolveProjectPath(options.project);
 
     try {
         logger.startSpinner('Analyzing project...');
 
-        const strategy = await detectStrategy(options.project, logger);
+        const strategy = await detectStrategy(projectPath, logger, { verbose: options.verbose });
 
         if (!strategy) {
             logger.failSpinner('Failed to detect project type');
@@ -22,23 +25,64 @@ async function generate(options) {
 
         logger.debug(`Using strategy: ${strategy.getName()}`);
 
-        const collection = await strategy.extract({
+        const result = await strategy.extract({
+            projectPath,
             baseUrl: options.baseUrl,
             format: options.format,
             include: options.include,
             exclude: options.exclude,
             concurrency: options.concurrency,
+            seed: options.seed,
+            enhance: options.enhance !== false,
         });
 
+        const endpointCount = countResultEndpoints(result, options.format);
+        const title = getResultTitle(result, options.format);
+        const isOpenApiOutput =
+            options.format === 'openapi' || Boolean(result.openapi && result.paths);
+
+        if (options.dryRun) {
+            logger.succeedSpinner('Dry run complete');
+            logger.info(`Strategy: ${strategy.getName()}`);
+            logger.info(`Title: ${title}`);
+            logger.info(`Endpoints: ${endpointCount} total`);
+            logger.info('No files written (--dry-run)');
+            return;
+        }
+
         logger.updateSpinner('Writing output file...');
-        const output = JSON.stringify(collection, null, 2);
+        const output = JSON.stringify(result, null, 2);
         await writeFile(options.out, output);
 
-        logger.succeedSpinner(`Collection generated successfully!`);
-        logger.success(`Output: ${options.out}`);
-        logger.info(`Collection: ${collection.info.name}`);
-        logger.info(`Endpoints: ${countEndpoints(collection)} total`);
+        if (options.envOut) {
+            const projectConfig = await loadProjectConfig(projectPath);
+            const baseUrl =
+                options.baseUrl ||
+                result.variable?.find((v) => v.key === 'baseUrl')?.value ||
+                projectConfig.baseUrl;
 
+            const environment = buildEnvironment({
+                name: `${title} Environment`,
+                baseUrl,
+            });
+
+            await writeFile(options.envOut, JSON.stringify(environment, null, 2));
+            logger.info(`Environment: ${options.envOut}`);
+        }
+
+        logger.succeedSpinner(
+            isOpenApiOutput
+                ? 'OpenAPI spec generated successfully!'
+                : 'Collection generated successfully!',
+        );
+        logger.success(`Output: ${options.out}`);
+
+        if (isOpenApiOutput) {
+            logger.info(`Spec: ${title}`);
+        } else {
+            logger.info(`Collection: ${title}`);
+        }
+        logger.info(`Endpoints: ${endpointCount} total`);
     } catch (error) {
         logger.failSpinner('Generation failed');
         logger.error(error.message);
@@ -53,69 +97,6 @@ async function generate(options) {
 
         process.exit(1);
     }
-}
-
-async function detectStrategy(project, logger) {
-    logger.debug('Detecting strategy...');
-
-    if (isUrl(project)) {
-        logger.debug('Input is URL, trying OpenAPI strategy...');
-        const strategy = new OpenApiStrategy(project, logger);
-        if (await strategy.validate()) {
-            return strategy;
-        }
-    }
-
-    const openApiFiles = [
-        'openapi.json',
-        'openapi.yaml',
-        'openapi.yml',
-        'swagger.json',
-        'swagger.yaml',
-        'swagger.yml',
-    ];
-
-    for (const filename of openApiFiles) {
-        const filepath = `${project}/${filename}`;
-        logger.debug(`Checking for ${filepath}...`);
-
-        const strategy = new OpenApiStrategy(filepath, logger);
-        if (await strategy.validate()) {
-            logger.debug(`Found: ${filepath}`);
-            return strategy;
-        }
-    }
-
-    logger.debug('OpenAPI not found, trying parser strategy...');
-    const ParserStrategy = require('../../core/strategies/parser-strategy');
-    const parserStrategy = new ParserStrategy(project, logger);
-
-    if (await parserStrategy.validate()) {
-        logger.debug('Found Spring Boot controllers');
-        return parserStrategy;
-    }
-
-    return null;
-}
-
-function countEndpoints(collection) {
-    let count = 0;
-
-    function countInFolder(items) {
-        for (const item of items) {
-            if (item.item) {
-                countInFolder(item.item);
-            } else if (item.request) {
-                count++;
-            }
-        }
-    }
-
-    if (collection.item) {
-        countInFolder(collection.item);
-    }
-
-    return count;
 }
 
 module.exports = generate;

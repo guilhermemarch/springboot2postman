@@ -1,0 +1,66 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`ParserStrategy integration generates postman collection with schemas and endpoints 1`] = `
+{
+  "folders": [
+    {
+      "name": "UserResource",
+      "requests": [
+        {
+          "hasBody": false,
+          "method": "GET",
+          "name": "Health",
+          "path": "/api/health",
+          "responseCount": 3,
+        },
+      ],
+    },
+    {
+      "name": "UserController",
+      "requests": [
+        {
+          "hasBody": false,
+          "method": "GET",
+          "name": "List Users",
+          "path": "/api/users",
+          "responseCount": 2,
+        },
+        {
+          "hasBody": false,
+          "method": "GET",
+          "name": "User",
+          "path": "/api/users/{{userId}}",
+          "responseCount": 4,
+        },
+        {
+          "hasBody": true,
+          "method": "POST",
+          "name": "Create  User",
+          "path": "/api/users",
+          "responseCount": 4,
+        },
+        {
+          "hasBody": true,
+          "method": "PUT",
+          "name": "Update  User",
+          "path": "/api/users/{{userId}}",
+          "responseCount": 5,
+        },
+        {
+          "hasBody": false,
+          "method": "DELETE",
+          "name": "User",
+          "path": "/api/users/{{userId}}",
+          "responseCount": 4,
+        },
+      ],
+    },
+  ],
+  "name": "User API",
+  "requestCount": 6,
+  "variables": [
+    "baseUrl",
+    "token",
+  ],
+}
+`;

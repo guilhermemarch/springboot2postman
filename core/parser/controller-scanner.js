@@ -24,30 +24,30 @@ class ControllerScanner {
             `${projectPath}/src/**/*.java`,
         ];
 
-        let javaFiles = [];
+        const javaFiles = new Set();
         for (const pattern of patterns) {
             this.logger.debug(`Searching pattern: ${pattern}`);
             const files = await glob(pattern, { nodir: true });
-            javaFiles.push(...files);
-
+            files.forEach((file) => javaFiles.add(file));
             if (files.length > 0) {
                 this.logger.debug(`Found ${files.length} files with pattern`);
-                break;
             }
         }
 
-        javaFiles = [...new Set(javaFiles)];
+        let javaFileList = [...javaFiles];
 
-        if (javaFiles.length === 0) {
+        if (javaFileList.length === 0) {
             throw new NoControllersFoundError(projectPath);
         }
 
-        javaFiles = this.applyFilters(javaFiles, options);
+        javaFileList = this.applyFilters(javaFileList, options);
 
-        this.logger.debug(`Found ${javaFiles.length} Java files after filtering, checking for controllers...`);
+        this.logger.debug(
+            `Found ${javaFileList.length} Java files after filtering, checking for controllers...`,
+        );
 
         const controllers = [];
-        for (const file of javaFiles) {
+        for (const file of javaFileList) {
             if (await this.isController(file)) {
                 controllers.push(file);
                 this.logger.debug(`✓ Controller: ${file}`);
@@ -66,14 +66,18 @@ class ControllerScanner {
         let filtered = files;
 
         if (options.include) {
-            const includePatterns = options.include.split(',').map(p => p.trim());
-            filtered = filtered.filter(file => includePatterns.some(pattern => this.matchesPattern(file, pattern)));
+            const includePatterns = options.include.split(',').map((p) => p.trim());
+            filtered = filtered.filter((file) =>
+                includePatterns.some((pattern) => this.matchesPattern(file, pattern)),
+            );
             this.logger.debug(`Include filter applied: ${filtered.length} files remaining`);
         }
 
         if (options.exclude) {
-            const excludePatterns = options.exclude.split(',').map(p => p.trim());
-            filtered = filtered.filter(file => !excludePatterns.some(pattern => this.matchesPattern(file, pattern)));
+            const excludePatterns = options.exclude.split(',').map((p) => p.trim());
+            filtered = filtered.filter(
+                (file) => !excludePatterns.some((pattern) => this.matchesPattern(file, pattern)),
+            );
             this.logger.debug(`Exclude filter applied: ${filtered.length} files remaining`);
         }
 

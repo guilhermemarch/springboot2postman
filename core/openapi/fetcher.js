@@ -1,7 +1,11 @@
 const axios = require('axios');
 const yaml = require('js-yaml');
 const { readFile, isUrl, pathExists, getExtension } = require('../../lib/file-utils');
-const { OpenApiFetchError, InvalidOpenApiError, ProjectNotFoundError } = require('../../lib/errors');
+const {
+    OpenApiFetchError,
+    InvalidOpenApiError,
+    ProjectNotFoundError,
+} = require('../../lib/errors');
 
 class OpenApiFetcher {
     constructor(logger) {
@@ -24,7 +28,7 @@ class OpenApiFetcher {
             const response = await axios.get(url, {
                 timeout: 30000,
                 headers: {
-                    'Accept': 'application/json, application/yaml, application/x-yaml',
+                    Accept: 'application/json, application/yaml, application/x-yaml',
                 },
             });
 
@@ -90,7 +94,7 @@ class OpenApiFetcher {
             throw new InvalidOpenApiError('Missing or invalid "paths" field');
         }
 
-        this.logger.debug(`Valid ${spec.openapi || `Swagger ${  spec.swagger}`} specification`);
+        this.logger.debug(`Valid ${spec.openapi || `Swagger ${spec.swagger}`} specification`);
         return true;
     }
 }

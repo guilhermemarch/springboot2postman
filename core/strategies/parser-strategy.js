@@ -4,11 +4,20 @@ const JavaFileParser = require('../parser/java-parser');
 const AnnotationExtractor = require('../parser/annotation-extractor');
 const TypeResolver = require('../parser/type-resolver');
 const DtoScanner = require('../parser/dto-scanner');
-const { createEmptyIR, createEndpoint, createParameter, createRequestBody, addEndpoint, setServerUrl } = require('../ir/models');
+const {
+    createEmptyIR,
+    createEndpoint,
+    createParameter,
+    createRequestBody,
+    addEndpoint,
+    addSchema,
+    setServerUrl,
+} = require('../ir/models');
 const OpenApiBuilder = require('../ir/openapi-builder');
 const OpenApiConverter = require('../openapi/converter');
 const MockDataGenerator = require('../generator/mock-generator');
 const PostmanEnhancer = require('../postman/postman-enhancer');
+const { loadProjectConfig } = require('../config/project-config');
 
 class ParserStrategy extends BaseStrategy {
     constructor(source, logger) {
@@ -24,11 +33,14 @@ class ParserStrategy extends BaseStrategy {
         this.postmanEnhancer = new PostmanEnhancer(logger, this.mockGenerator);
     }
 
-    async validate() {
+    async validate(options = {}) {
         try {
             const controllers = await this.scanner.findControllers(this.source);
             return controllers.length > 0;
-        } catch {
+        } catch (error) {
+            if (options.verbose) {
+                this.logger.debug(`Parser validation failed: ${error.message}`);
+            }
             return false;
         }
     }
@@ -36,10 +48,18 @@ class ParserStrategy extends BaseStrategy {
     async extract(options = {}) {
         this.logger.debug('Using Parser strategy');
 
-        let ir = createEmptyIR('Spring Boot API', '1.0.0');
+        const projectConfig = await loadProjectConfig(this.source);
+        const collectionTitle = projectConfig.appName || 'Spring Boot API';
+        const baseUrl = options.baseUrl || projectConfig.baseUrl;
 
-        if (options.baseUrl) {
-            ir = setServerUrl(ir, options.baseUrl);
+        if (options.seed !== undefined) {
+            this.mockGenerator.setSeed(options.seed);
+        }
+
+        let ir = createEmptyIR(collectionTitle, '1.0.0');
+
+        if (baseUrl) {
+            ir = setServerUrl(ir, baseUrl);
         }
 
         const concurrency = parseInt(options.concurrency, 10) || 5;
@@ -58,10 +78,16 @@ class ParserStrategy extends BaseStrategy {
         let processedCount = 0;
         let totalEndpoints = 0;
 
-        const results = await this.parseControllersParallel(controllers, concurrency, (completed, total, filename) => {
-            processedCount = completed;
-            this.logger.updateSpinner(`Parsing controllers... (${completed}/${total}) ${filename}`);
-        });
+        const results = await this.parseControllersParallel(
+            controllers,
+            concurrency,
+            (completed, total, filename) => {
+                processedCount = completed;
+                this.logger.updateSpinner(
+                    `Parsing controllers... (${completed}/${total}) ${filename}`,
+                );
+            },
+        );
 
         for (const result of results) {
             if (result.success) {
@@ -75,20 +101,30 @@ class ParserStrategy extends BaseStrategy {
             }
         }
 
-        this.logger.info(`Parsed ${processedCount}/${totalControllers} controllers, extracted ${totalEndpoints} endpoints`);
+        this.logger.info(
+            `Parsed ${processedCount}/${totalControllers} controllers, extracted ${totalEndpoints} endpoints`,
+        );
+
+        ir = this.populateSchemas(ir);
 
         this.logger.updateSpinner('Converting to OpenAPI format...');
         const openApiSpec = this.openApiBuilder.buildFromIR(ir);
 
+        if (options.format === 'openapi') {
+            return openApiSpec;
+        }
+
         this.logger.updateSpinner('Converting to Postman collection...');
         let collection = await this.converter.convert(openApiSpec, options);
 
-        if (options.baseUrl) {
-            collection = this.converter.applyBaseUrl(collection, options.baseUrl);
+        if (baseUrl) {
+            collection = this.converter.applyBaseUrl(collection, baseUrl);
         }
 
-        this.logger.updateSpinner('Enhancing Postman collection...');
-        collection = this.postmanEnhancer.enhance(collection, options);
+        if (options.enhance !== false) {
+            this.logger.updateSpinner('Enhancing Postman collection...');
+            collection = this.postmanEnhancer.enhance(collection, options);
+        }
 
         return collection;
     }
@@ -101,12 +137,12 @@ class ParserStrategy extends BaseStrategy {
 
         const workers = [];
         for (let i = 0; i < Math.min(concurrency, total); i++) {
-            workers.push(this.createWorker(queue, results, () => {
-                completed++;
-                const current = queue.length > 0 ? queue[0] : controllers[completed - 1];
-                const filename = current ? current.split(/[/\\]/).pop() : '';
-                onProgress(completed, total, filename);
-            }));
+            workers.push(
+                this.createWorker(queue, results, (filename) => {
+                    completed++;
+                    onProgress(completed, total, filename);
+                }),
+            );
         }
 
         await Promise.all(workers);
@@ -135,7 +171,7 @@ class ParserStrategy extends BaseStrategy {
                 });
             }
 
-            onComplete();
+            onComplete(filename);
         }
     }
 
@@ -148,79 +184,90 @@ class ParserStrategy extends BaseStrategy {
         const basePath = this.annotationExtractor.extractBasePath(classInfo.annotations);
         this.logger.debug(`  Base path: ${basePath || '/'}`);
 
-        const methods = this.javaParser.extractMethods(content);
+        const methods = await this.javaParser.extractMethods(content);
         this.logger.debug(`  Found ${methods.length} method(s)`);
 
         for (const method of methods) {
-            const endpointInfo = this.annotationExtractor.extractEndpointInfo(method.annotations);
+            const endpointInfos = this.annotationExtractor.extractEndpointInfos(method.annotations);
 
-            if (!endpointInfo) {
-                continue;
-            }
-
-            const fullPath = this.buildPath(basePath, endpointInfo.path);
-
-            const endpoint = createEndpoint(
-                endpointInfo.method,
-                fullPath,
-                this.generateEndpointName(method.name, endpointInfo.method)
-            );
-
-            endpoint.tags = [classInfo.className];
-
-            const params = this.javaParser.parseParameters(method.parameters);
-
-            for (const param of params) {
-                const paramInfo = this.annotationExtractor.extractParameterInfo(
-                    param.annotations,
-                    param.name,
-                    param.type
+            for (const endpointInfo of endpointInfos) {
+                endpoints.push(
+                    this.buildEndpointFromMethod(method, endpointInfo, classInfo, basePath),
                 );
-
-                if (paramInfo) {
-                    if (paramInfo.in === 'body') {
-                        const requestBody = createRequestBody(paramInfo.type, paramInfo.required);
-
-                        const dtoFields = this.dtoScanner.inferDtoFields(paramInfo.type);
-                        requestBody.example = this.mockGenerator.generateRequestExample(
-                            paramInfo.type,
-                            dtoFields,
-                            endpointInfo.method
-                        );
-
-                        endpoint.requestBody = requestBody;
-                    } else {
-                        const parameter = createParameter(
-                            paramInfo.name,
-                            paramInfo.type,
-                            paramInfo.in,
-                            paramInfo.required
-                        );
-
-                        const resolved = this.typeResolver.resolveType(paramInfo.type);
-                        parameter.jsonType = resolved.type || 'string';
-                        parameter.format = resolved.format;
-                        parameter.example = this.mockGenerator.generateForField(paramInfo.name, paramInfo.type);
-
-                        if (paramInfo.defaultValue !== undefined) {
-                            parameter.defaultValue = paramInfo.defaultValue;
-                        }
-
-                        endpoint.parameters[paramInfo.in].push(parameter);
-                    }
-                }
             }
-
-            if (method.returnType && method.returnType !== 'void') {
-                const responseSchema = this.typeResolver.resolveType(method.returnType);
-                endpoint.responses = this.generateResponses(endpointInfo.method, method.returnType, fullPath);
-                endpoint.responses[0].schema = responseSchema;
-            }
-
-            endpoints.push(endpoint);
         }
 
         return endpoints;
+    }
+
+    buildEndpointFromMethod(method, endpointInfo, classInfo, basePath) {
+        const fullPath = this.buildPath(basePath, endpointInfo.path);
+
+        const endpoint = createEndpoint(
+            endpointInfo.method,
+            fullPath,
+            this.generateEndpointName(method.name, endpointInfo.method),
+        );
+
+        endpoint.tags = [classInfo.className];
+
+        const params = method.parameters || [];
+
+        for (const param of params) {
+            const paramInfos = this.annotationExtractor.extractParameterInfos(
+                param.annotations,
+                param.name,
+                param.type,
+            );
+
+            for (const paramInfo of paramInfos) {
+                if (paramInfo.in === 'body') {
+                    const requestBody = createRequestBody(paramInfo.type, paramInfo.required);
+
+                    const dtoFields = this.dtoScanner.inferDtoFields(paramInfo.type);
+                    requestBody.example = this.mockGenerator.generateRequestExample(
+                        paramInfo.type,
+                        dtoFields,
+                        endpointInfo.method,
+                    );
+
+                    endpoint.requestBody = requestBody;
+                } else {
+                    const parameter = createParameter(
+                        paramInfo.name,
+                        paramInfo.type,
+                        paramInfo.in,
+                        paramInfo.required,
+                    );
+
+                    const resolved = this.typeResolver.resolveType(paramInfo.type);
+                    parameter.jsonType = resolved.type || 'string';
+                    parameter.format = resolved.format;
+                    parameter.example = this.mockGenerator.generateForField(
+                        paramInfo.name,
+                        paramInfo.type,
+                    );
+
+                    if (paramInfo.defaultValue !== undefined) {
+                        parameter.defaultValue = paramInfo.defaultValue;
+                    }
+
+                    endpoint.parameters[paramInfo.in].push(parameter);
+                }
+            }
+        }
+
+        if (method.returnType && method.returnType !== 'void') {
+            const responseSchema = this.typeResolver.resolveType(method.returnType);
+            endpoint.responses = this.generateResponses(
+                endpointInfo.method,
+                method.returnType,
+                fullPath,
+            );
+            endpoint.responses[0].schema = responseSchema;
+        }
+
+        return endpoint;
     }
 
     generateResponses(httpMethod, returnType, path) {
@@ -242,13 +289,21 @@ class ParserStrategy extends BaseStrategy {
                         status: 200,
                         description: 'Successful response',
                         contentType: 'application/json',
-                        example: this.mockGenerator.generateResponseExample(entityName, dtoFields, 'GET'),
+                        example: this.mockGenerator.generateResponseExample(
+                            entityName,
+                            dtoFields,
+                            'GET',
+                        ),
                     });
                     responses.push({
                         status: 404,
                         description: 'Not found',
                         contentType: 'application/json',
-                        example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                        example: this.mockGenerator.generateErrorResponse(
+                            404,
+                            `${entityName} not found`,
+                            path,
+                        ),
                     });
                 }
                 break;
@@ -258,13 +313,21 @@ class ParserStrategy extends BaseStrategy {
                     status: 201,
                     description: 'Created successfully',
                     contentType: 'application/json',
-                    example: this.mockGenerator.generateResponseExample(entityName, dtoFields, 'POST'),
+                    example: this.mockGenerator.generateResponseExample(
+                        entityName,
+                        dtoFields,
+                        'POST',
+                    ),
                 });
                 responses.push({
                     status: 400,
                     description: 'Bad request',
                     contentType: 'application/json',
-                    example: this.mockGenerator.generateErrorResponse(400, 'Validation failed', path),
+                    example: this.mockGenerator.generateErrorResponse(
+                        400,
+                        'Validation failed',
+                        path,
+                    ),
                 });
                 break;
 
@@ -274,13 +337,21 @@ class ParserStrategy extends BaseStrategy {
                     status: 200,
                     description: 'Updated successfully',
                     contentType: 'application/json',
-                    example: this.mockGenerator.generateResponseExample(entityName, dtoFields, httpMethod),
+                    example: this.mockGenerator.generateResponseExample(
+                        entityName,
+                        dtoFields,
+                        httpMethod,
+                    ),
                 });
                 responses.push({
                     status: 404,
                     description: 'Not found',
                     contentType: 'application/json',
-                    example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                    example: this.mockGenerator.generateErrorResponse(
+                        404,
+                        `${entityName} not found`,
+                        path,
+                    ),
                 });
                 break;
 
@@ -294,7 +365,11 @@ class ParserStrategy extends BaseStrategy {
                     status: 404,
                     description: 'Not found',
                     contentType: 'application/json',
-                    example: this.mockGenerator.generateErrorResponse(404, `${entityName} not found`, path),
+                    example: this.mockGenerator.generateErrorResponse(
+                        404,
+                        `${entityName} not found`,
+                        path,
+                    ),
                 });
                 break;
 
@@ -310,16 +385,28 @@ class ParserStrategy extends BaseStrategy {
     }
 
     extractEntityName(returnType) {
-        const name = returnType
-            .replace(/ResponseEntity</, '')
-            .replace(/List</, '')
-            .replace(/Set</, '')
-            .replace(/Collection</, '')
-            .replace(/Optional</, '')
-            .replace(/>/g, '')
-            .trim();
+        let type = returnType.trim();
 
-        return name || 'Entity';
+        const wrappers = ['ResponseEntity<', 'Optional<', 'Mono<', 'Flux<'];
+        for (const wrapper of wrappers) {
+            if (type.startsWith(wrapper) && type.endsWith('>')) {
+                type = type.slice(wrapper.length, -1).trim();
+            }
+        }
+
+        if (type.startsWith('List<') || type.startsWith('Set<') || type.startsWith('Collection<')) {
+            const inner = type.match(/<(.+)>$/)?.[1];
+            if (inner) {
+                return this.extractEntityName(inner);
+            }
+        }
+
+        const genericIndex = type.indexOf('<');
+        if (genericIndex > 0) {
+            type = type.slice(0, genericIndex);
+        }
+
+        return type || 'Entity';
     }
 
     buildPath(basePath, endpointPath) {
@@ -344,6 +431,67 @@ class ParserStrategy extends BaseStrategy {
         const titleCase = words.charAt(0).toUpperCase() + words.slice(1);
 
         return titleCase;
+    }
+
+    populateSchemas(ir) {
+        const referencedTypes = this.collectReferencedTypes(ir);
+        let result = ir;
+
+        for (const [name, dto] of this.dtoScanner.dtoCache) {
+            const schema = this.dtoScanner.generateSchemaFromDto(dto);
+            result = addSchema(result, name, schema);
+        }
+
+        for (const typeName of referencedTypes) {
+            if (result.schemas[typeName]) {
+                continue;
+            }
+
+            const dto = this.dtoScanner.getDto(typeName);
+            if (dto) {
+                result = addSchema(result, typeName, this.dtoScanner.generateSchemaFromDto(dto));
+            } else {
+                const fields = this.dtoScanner.inferDtoFields(typeName);
+                result = addSchema(
+                    result,
+                    typeName,
+                    this.dtoScanner.generateSchemaFromFields(fields),
+                );
+            }
+        }
+
+        return result;
+    }
+
+    collectReferencedTypes(ir) {
+        const types = new Set();
+
+        for (const endpoint of ir.endpoints) {
+            if (endpoint.requestBody?.schema?.$ref) {
+                const match = endpoint.requestBody.schema.$ref.match(
+                    /#\/components\/schemas\/(.+)$/,
+                );
+                if (match) types.add(match[1]);
+            }
+
+            for (const location of ['path', 'query', 'header']) {
+                for (const param of endpoint.parameters[location] || []) {
+                    if (this.typeResolver.needsSchema(param.javaType || param.type)) {
+                        const baseType = (param.javaType || param.type).replace(/<.*>/, '').trim();
+                        types.add(baseType);
+                    }
+                }
+            }
+
+            for (const response of endpoint.responses || []) {
+                if (response.schema?.$ref) {
+                    const match = response.schema.$ref.match(/#\/components\/schemas\/(.+)$/);
+                    if (match) types.add(match[1]);
+                }
+            }
+        }
+
+        return types;
     }
 }
 

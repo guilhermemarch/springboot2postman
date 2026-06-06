@@ -122,7 +122,8 @@ class OpenApiBuilder {
         };
 
         if (requestBody.example) {
-            body.content[requestBody.contentType || 'application/json'].example = requestBody.example;
+            body.content[requestBody.contentType || 'application/json'].example =
+                requestBody.example;
         }
 
         return body;
