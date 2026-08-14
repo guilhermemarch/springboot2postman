@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18, 20]
+        node-version: [18, 20, 22]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,3 +28,8 @@ jobs:
       - run: npm run test:coverage
         env:
           NODE_OPTIONS: --experimental-vm-modules
+
+      - name: Smoke test against fixture corpus
+        run: |
+          node cli/index.js generate --project tests/fixtures/shop-api --format openapi --out /tmp/smoke.json --strict --seed 1
+          node cli/index.js diff --project tests/fixtures/shop-api --against /tmp/smoke.json

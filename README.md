@@ -1,140 +1,126 @@
-# SpringBoot2Postman
+# springboot2postman
 
-Generate Postman collections automatically from any Spring Boot project — with or without OpenAPI/Swagger.
-
-[![npm weekly downloads](https://img.shields.io/npm/dw/springboot2postman?style=for-the-badge)](https://www.npmjs.com/package/springboot2postman)
-
-## Features
-
-- **Dual Strategy Support**: Works with OpenAPI specs (JSON/YAML) or parses Java source via CST (Concrete Syntax Tree)
-- **Static Analysis**: No compilation required — parses `@RestController` annotations directly
-- **Spring Boot Aware**: Understands `@GetMapping`, `@PostMapping`, `@RequestParam`, `@PathVariable`, `Pageable`, etc.
-- **Type Resolution**: Converts Java types and DTOs to JSON Schema in the generated OpenAPI intermediate spec
-- **Flexible Input**: Accepts project directories, OpenAPI file paths, or OpenAPI URLs
-- **Project Config**: Reads `application.properties` / `application.yml` for context path, port, and app name
-- **Large Codebase Support**: Parallel processing with configurable concurrency
-- **Package Filtering**: Include/exclude glob patterns for file paths
-
-## Installation
+Generate Postman collections, OpenAPI specs and `.http` files **from Spring Boot source code** — no build, no running application, no changes to your `pom.xml`.
 
 ```bash
-npm install -g springboot2postman
+npx springboot2postman --project ./any-spring-repo-you-just-cloned
 ```
 
-Or use directly with npx:
+## Why this exists
+
+Every other way of getting a Postman collection out of a Spring Boot service requires something you may not have:
+
+| Approach                                    | Requires                                     |
+| ------------------------------------------- | -------------------------------------------- |
+| springdoc + Postman import                  | The app running (with the right profile)     |
+| openapi-maven-plugin / restdocs-api-spec    | A working build + build file changes         |
+| Writing the collection by hand              | Your afternoon                               |
+| **springboot2postman**                      | **A checkout of the source code**            |
+
+If your app already runs with springdoc, importing `http://localhost:8080/v3/api-docs` straight into Postman is great — use that. This tool is for when you can't or don't want to run the code: legacy services, unfamiliar repos, CI pipelines, codebases that take 20 minutes to boot.
+
+## What you get
+
+- **Static analysis of Java sources** (CST-based, not regex): `@RestController`, `@RequestMapping` with named attributes and constants, multiple paths, `produces`/`consumes`, `@ResponseStatus`, records, enums, controller inheritance (including generic base controllers like `CrudController<T, ID>`), API-first interfaces, Lombok-style DTOs, Jackson (`@JsonProperty`, `@JsonIgnore`), Bean Validation → schema constraints, Javadoc → descriptions, multipart uploads, `@ModelAttribute` expansion, `Pageable`, cookies and headers.
+- **Multi-module projects**: all `src/main/java` roots are scanned; `src/test` never is.
+- **Honest output**: if a type cannot be resolved, you get an empty schema **and a warning naming it** — never invented fields. The run ends with a resolution report; `--strict` turns it into a CI gate.
+- **Deterministic**: same input + same seed = byte-identical output. Diff-friendly by default.
+- **Three formats**: Postman collection v2.1, OpenAPI 3.0.3, and `.http` (IntelliJ HTTP Client / VS Code REST Client).
+- **Drift detection**: `springboot2postman diff` fails CI when the code no longer matches your committed collection or spec.
+
+## Install
 
 ```bash
-npx springboot2postman --project ./my-spring-app
+npm install -g springboot2postman   # or use npx
 ```
 
-## Quick Start
+Requires Node.js 18+.
+
+## Usage
 
 ```bash
-# From a Spring Boot project directory
-springboot2postman --project . --out api.postman_collection.json
+# Postman collection from source (most common)
+springboot2postman --project ./my-spring-app --out api.postman_collection.json
 
-# From an OpenAPI file path
-springboot2postman --project ./docs/openapi.yaml --out api.json
+# OpenAPI 3 spec instead
+springboot2postman --project ./my-spring-app --format openapi --out openapi.json
 
-# From an OpenAPI URL (springdoc)
-springboot2postman --project http://localhost:8080/v3/api-docs --out api.json
+# .http file for IntelliJ / VS Code REST Client
+springboot2postman --project ./my-spring-app --format http --out api.http
 
-# With a custom base URL
-springboot2postman --project ./my-app --base-url https://staging.example.com
+# From an OpenAPI URL (springdoc) — including behind auth
+springboot2postman --project http://localhost:8080/v3/api-docs --bearer $TOKEN
 
-# Export OpenAPI instead of Postman
-springboot2postman --project ./my-app --format openapi --out api-spec.json
+# Pipe to stdout
+springboot2postman --project . --out - | jq '.info'
 
-# Deterministic mock data (useful for CI/snapshots)
-springboot2postman --project ./my-app --seed 42
+# Postman environment alongside the collection
+springboot2postman --project . --env-out api.postman_environment.json
 
-# Dry run (no files written)
-springboot2postman generate --project ./my-app --dry-run
+# CI: fail when anything could not be resolved
+springboot2postman --project . --strict --quiet
 
-# Validate project for CI
-springboot2postman validate --project ./my-app
+# CI: fail when the API drifted from the committed spec
+springboot2postman diff --project . --against docs/openapi.json
 
-# Export Postman environment file
-springboot2postman generate --project ./my-app --env-out api.postman_environment.json
-
-# Large project with filtering
-springboot2postman --project ./large-app --include "com.example.api.*" --exclude "*Test*" --concurrency 10
+# Force parsing the source even when a (possibly stale) spec file exists
+springboot2postman --project . --strategy parser
 ```
 
-## Import into Postman
+## Commands
 
-1. Open Postman → **Import** → **File**
-2. Select the generated `postman_collection.json`
-3. Optionally import `postman_environment.json` from `--env-out`
-4. Set collection variables `baseUrl` and `token` as needed
+| Command    | Description                                                        |
+| ---------- | ------------------------------------------------------------------ |
+| `generate` | Generate a collection / spec / .http file (default command)        |
+| `validate` | Check whether the project can be processed (exit code for CI)      |
+| `diff`     | Compare generated API against an existing collection or spec       |
 
-## CLI Commands
+## Options (`generate`)
 
-| Command    | Description                                             |
-| ---------- | ------------------------------------------------------- |
-| `generate` | Generate a Postman collection or OpenAPI spec (default) |
-| `validate` | Check whether the project can be processed              |
+| Option                 | Description                                                    | Default                       |
+| ---------------------- | -------------------------------------------------------------- | ----------------------------- |
+| `--project <path>`     | Project path, OpenAPI file, or OpenAPI URL (required)          | —                             |
+| `--out <file>`         | Output file, or `-` for stdout                                 | `./postman_collection.json`   |
+| `--format <format>`    | `postman`, `openapi` or `http`                                 | `postman`                     |
+| `--env-out <file>`     | Also write a Postman environment file                          | —                             |
+| `--base-url <url>`     | Override the base URL                                          | from `application.properties` |
+| `--strategy <mode>`    | `auto`, `parser` (force source) or `openapi` (force spec)      | `auto`                        |
+| `--header <h>`         | Header for protected spec URLs (repeatable)                    | —                             |
+| `--bearer <token>`     | Bearer token for protected spec URLs                           | —                             |
+| `--include <globs>`    | Only scan matching file paths (comma-separated)                | —                             |
+| `--exclude <globs>`    | Skip matching file paths (comma-separated)                     | —                             |
+| `--seed <n>`           | Seed for deterministic example data                            | `1`                           |
+| `--strict`             | Exit 2 when any file/type could not be resolved                | off                           |
+| `--quiet`              | Errors only (CI/piping)                                        | off                           |
+| `--dry-run`            | Analyze without writing files                                  | off                           |
+| `--no-enhance`         | Skip Postman post-processing                                   | off                           |
+| `--concurrency <n>`    | Parallel file parsing                                          | `5`                           |
 
-## CLI Options (`generate`)
+Options can also live in a `springboot2postman.config.json` in the working directory; CLI flags win.
 
-| Option                 | Description                                              | Default                                                  |
-| ---------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `--project <path>`     | Project path, OpenAPI file, or OpenAPI URL (required)    | —                                                        |
-| `--out <file>`         | Output file path                                         | `./postman_collection.json`                              |
-| `--env-out <file>`     | Postman environment output path                          | —                                                        |
-| `--dry-run`            | Analyze without writing output files                     | `false`                                                  |
-| `--base-url <url>`     | Override the base URL in the collection                  | from `application.properties` or `http://localhost:8080` |
-| `--format <format>`    | Output format: `postman` or `openapi`                    | `postman`                                                |
-| `--include <patterns>` | Include only matching file paths (comma-separated globs) | —                                                        |
-| `--exclude <patterns>` | Exclude matching file paths (comma-separated globs)      | —                                                        |
-| `--concurrency <n>`    | Max parallel file parsing                                | `5`                                                      |
-| `--seed <n>`           | Seed for deterministic mock data                         | random                                                   |
-| `--no-enhance`         | Skip Postman collection enhancements                     | `false`                                                  |
-| `--verbose`            | Enable verbose logging                                   | `false`                                                  |
+## The resolution report
 
-## How It Works
+Every run tells you exactly what it could and could not do:
 
-### Strategy Detection
+```
+ok  Collection generated successfully!
+i   Endpoints: 14
+i   Schemas: 7
+warn Unresolved type: LegacyBlob (type not found) — used at ArchiveController.download
+```
 
-The tool automatically detects the best approach:
+Unknown types become `{}` in the schema — never plausible-looking invented fields. `--strict` makes any warning fail the build.
 
-1. **URL Input** → Fetches and converts OpenAPI spec
-2. **OpenAPI File** → Direct file path to JSON/YAML spec
-3. **OpenAPI in Project** → Searches root, `src/main/resources/`, `docs/`, etc.
-4. **Java Controllers Found** → Parser strategy (CST-based static analysis)
+## What is NOT supported (yet)
 
-### Parser Strategy
+Read this before trusting the output:
 
-When no OpenAPI spec is available, the tool:
-
-1. Reads `application.properties` / `application.yml` for base URL and collection name
-2. Scans for DTOs and builds JSON Schema components
-3. Scans for files with `@RestController` or `@Controller` annotations
-4. Parses controllers using `java-parser` (CST)
-5. Extracts endpoint mappings and parameters (including `Pageable`)
-6. Builds an OpenAPI specification with populated schemas
-7. Converts to Postman collection format
-8. Enhances collection (variables, headers, saved responses)
-
-### Supported Annotations
-
-| Controller        | Method           | Parameter                                   |
-| ----------------- | ---------------- | ------------------------------------------- |
-| `@RestController` | `@GetMapping`    | `@PathVariable`                             |
-| `@Controller`     | `@PostMapping`   | `@RequestParam`                             |
-| `@RequestMapping` | `@PutMapping`    | `@RequestBody`                              |
-|                   | `@DeleteMapping` | `@RequestHeader`                            |
-|                   | `@PatchMapping`  | `@ModelAttribute`                           |
-|                   |                  | `Pageable` (as page/size/sort query params) |
-
-## Known Limitations
-
-- **Java only** — Kotlin controllers are not supported
-- **No Lombok expansion** — fields must be visible in source (private fields in DTOs are detected)
-- **Single module** — scans one `--project` directory; multi-module monorepos need per-module runs
-- **Regex-free but CST-limited** — complex annotation arrays (`value = {"/a", "/b"}`) are not expanded
-- **No Spring Security extraction** — OAuth/API key config is not inferred from annotations
-- **Include/exclude** — filters match file paths, not Java package names directly
+- **Kotlin controllers** — Java only for now.
+- **Endpoints registered programmatically** (`RouterFunction`, functional endpoints).
+- **Constants resolved through method calls or complex expressions** in mapping paths (simple constants, cross-file constants and string concatenation work).
+- **Spring Security inference** — auth is derived from OpenAPI `securitySchemes` when present, but not guessed from `SecurityFilterChain` code.
+- **Error response bodies** — 4xx statuses found in the code are listed, but their payload shape is not inferred from `@ControllerAdvice`.
+- **Type variables that never get bound** (raw `T` in an unused abstract base) resolve to empty objects and are reported.
 
 ## Development
 
@@ -146,18 +132,19 @@ npm test
 npm run lint
 ```
 
-## Error Codes
+The test corpus in `tests/fixtures/shop-api` is a realistic multi-module project (records, Lombok, inheritance, API-first interfaces, multipart, enums) — every parser bug fixed in v2 has a regression test against it.
 
-| Code                   | Description                                         |
-| ---------------------- | --------------------------------------------------- |
-| `PROJECT_NOT_FOUND`    | The specified project path does not exist           |
-| `NO_CONTROLLERS_FOUND` | No Spring Boot controllers found in the project     |
-| `OPENAPI_FETCH_FAILED` | Failed to fetch OpenAPI specification from URL/file |
-| `INVALID_OPENAPI`      | The OpenAPI specification is invalid or unsupported |
-| `PARSE_ERROR`          | Failed to parse a Java file                         |
-| `CONVERSION_FAILED`    | Failed to convert to Postman collection             |
+## Error codes
 
-## Requirements
+| Code                   | Meaning                                              |
+| ---------------------- | ---------------------------------------------------- |
+| `PROJECT_NOT_FOUND`    | The specified project path does not exist            |
+| `NO_CONTROLLERS_FOUND` | No Spring controllers found (or filters exclude all) |
+| `OPENAPI_FETCH_FAILED` | Could not fetch the spec (cause is printed)          |
+| `INVALID_OPENAPI`      | The spec is invalid or unsupported                   |
+| `PARSE_ERROR`          | A Java file could not be parsed (file is skipped)    |
+| `CONVERSION_FAILED`    | OpenAPI → Postman conversion failed                  |
 
-- Node.js 16.0.0 or higher
-- npm 7.0.0 or higher
+## License
+
+MIT

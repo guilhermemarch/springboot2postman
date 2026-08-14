@@ -2,13 +2,18 @@ const Logger = require('../../lib/logger');
 const { detectStrategy, resolveProjectPath } = require('../../lib/strategy-detector');
 
 async function validate(options) {
-    const logger = new Logger(options.verbose);
+    const logger = new Logger(options.verbose, options.quiet);
     const projectPath = resolveProjectPath(options.project);
 
     try {
         logger.startSpinner('Validating project...');
 
-        const strategy = await detectStrategy(projectPath, logger, { verbose: options.verbose });
+        const strategy = await detectStrategy(projectPath, logger, {
+            verbose: options.verbose,
+            strategy: options.strategy,
+            headers: options.header,
+            bearer: options.bearer,
+        });
 
         if (!strategy) {
             logger.failSpinner('Validation failed');
@@ -23,6 +28,10 @@ async function validate(options) {
     } catch (error) {
         logger.failSpinner('Validation failed');
         logger.error(error.message);
+
+        if (error.details?.originalError && error.details.originalError !== error.message) {
+            logger.error(`Cause: ${error.details.originalError}`);
+        }
 
         if (options.verbose && error.stack) {
             console.error(`\n${error.stack}`);

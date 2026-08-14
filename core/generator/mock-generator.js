@@ -1,224 +1,216 @@
 const { faker } = require('@faker-js/faker');
 
-class MockDataGenerator {
+/**
+ * Schema-driven example generation.
+ *
+ * The declared schema always wins: an integer field named "status" gets an
+ * integer, an enum field gets one of its real values, formats (uuid, email,
+ * date-time, ...) are honored. Field-name hints only refine plain strings.
+ * With a seed set, output is fully deterministic (no unseeded Date calls).
+ */
+class ExampleGenerator {
     constructor(logger) {
         this.logger = logger;
-        this.fieldPatterns = this.initFieldPatterns();
+        this.seeded = false;
     }
 
     setSeed(seed) {
-        faker.seed(
-            typeof seed === 'string'
-                ? seed.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
-                : seed,
-        );
+        const numeric = typeof seed === 'number' ? seed : parseInt(seed, 10);
+        faker.seed(Number.isNaN(numeric) ? 0 : numeric);
+        this.seeded = true;
     }
 
-    initFieldPatterns() {
-        return [
-            { pattern: /email/i, generator: () => faker.internet.email() },
-            {
-                pattern: /^name$|firstName|lastName|fullName/i,
-                generator: () => faker.person.fullName(),
-            },
-            { pattern: /^firstName$/i, generator: () => faker.person.firstName() },
-            { pattern: /^lastName$/i, generator: () => faker.person.lastName() },
-            { pattern: /username|login/i, generator: () => faker.internet.username() },
-            { pattern: /password/i, generator: () => '********' },
-            { pattern: /phone|mobile|tel/i, generator: () => faker.phone.number() },
-            { pattern: /address|street/i, generator: () => faker.location.streetAddress() },
-            { pattern: /city/i, generator: () => faker.location.city() },
-            { pattern: /state|province/i, generator: () => faker.location.state() },
-            { pattern: /country/i, generator: () => faker.location.country() },
-            { pattern: /zip|postal/i, generator: () => faker.location.zipCode() },
-            { pattern: /url|website|link/i, generator: () => faker.internet.url() },
-            { pattern: /image|avatar|photo|picture/i, generator: () => faker.image.avatar() },
-            { pattern: /title/i, generator: () => faker.lorem.sentence(3) },
-            {
-                pattern: /description|bio|about|summary/i,
-                generator: () => faker.lorem.paragraph(1),
-            },
-            { pattern: /content|body|text/i, generator: () => faker.lorem.paragraphs(2) },
-            { pattern: /company|organization/i, generator: () => faker.company.name() },
-            { pattern: /job|position|role/i, generator: () => faker.person.jobTitle() },
-            {
-                pattern: /price|amount|cost|total/i,
-                generator: () => parseFloat(faker.commerce.price()),
-            },
-            {
-                pattern: /quantity|count|qty/i,
-                generator: () => faker.number.int({ min: 1, max: 100 }),
-            },
-            { pattern: /age/i, generator: () => faker.number.int({ min: 18, max: 80 }) },
-            { pattern: /rating|score/i, generator: () => faker.number.int({ min: 1, max: 5 }) },
-            {
-                pattern: /status/i,
-                generator: () => faker.helpers.arrayElement(['ACTIVE', 'INACTIVE', 'PENDING']),
-            },
-            {
-                pattern: /type|category/i,
-                generator: () => faker.helpers.arrayElement(['TYPE_A', 'TYPE_B', 'TYPE_C']),
-            },
-            { pattern: /uuid|guid/i, generator: () => faker.string.uuid() },
-            { pattern: /token/i, generator: () => faker.string.alphanumeric(32) },
-            { pattern: /code/i, generator: () => faker.string.alphanumeric(8).toUpperCase() },
-        ];
-    }
+    /**
+     * Generate an example value for a JSON schema.
+     *
+     * @param {object|null} schema
+     * @param {object} schemas components.schemas registry for $ref resolution
+     * @param {string} fieldName current property name (string hints only)
+     * @param {Set<string>} visitedRefs cycle guard
+     * @param {number} depth recursion guard
+     */
+    fromSchema(schema, schemas = {}, fieldName = '', visitedRefs = new Set(), depth = 0) {
+        if (schema === null || schema === undefined || depth > 6) {
+            return null;
+        }
 
-    generateForField(fieldName, javaType) {
-        for (const { pattern, generator } of this.fieldPatterns) {
-            if (pattern.test(fieldName)) {
-                return generator();
+        if (schema === true) {
+            return {};
+        }
+
+        if (schema.$ref) {
+            const name = schema.$ref.split('/').pop();
+            if (visitedRefs.has(name)) {
+                // Recursive type: stop expanding.
+                return schema.$ref.includes('/') ? {} : null;
             }
+            const target = schemas[name];
+            if (!target) {
+                return {};
+            }
+            const nextVisited = new Set(visitedRefs);
+            nextVisited.add(name);
+            return this.fromSchema(target, schemas, fieldName, nextVisited, depth + 1);
         }
-        return this.generateForType(javaType, fieldName);
+
+        if (schema.example !== undefined) {
+            return schema.example;
+        }
+
+        if (schema.default !== undefined) {
+            return schema.default;
+        }
+
+        if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+            return schema.enum[0];
+        }
+
+        switch (schema.type) {
+            case 'string':
+                return this.stringExample(schema, fieldName);
+            case 'integer':
+                return this.integerExample(schema);
+            case 'number':
+                return this.numberExample(schema);
+            case 'boolean':
+                return true;
+            case 'array': {
+                const count = Math.max(schema.minItems || 0, 1);
+                const items = [];
+                for (let i = 0; i < Math.min(count, 2); i++) {
+                    items.push(
+                        this.fromSchema(schema.items, schemas, fieldName, visitedRefs, depth + 1),
+                    );
+                }
+                return items;
+            }
+            case 'object':
+            default:
+                return this.objectExample(schema, schemas, visitedRefs, depth);
+        }
     }
 
-    generateForType(javaType, fieldName = '') {
-        if (!javaType) return 'example';
-
-        const baseType = javaType.replace(/<.*>/, '').trim();
-
-        const typeGenerators = {
-            String: () => this.generateStringValue(fieldName),
-            char: () => 'A',
-            Character: () => 'A',
-            int: () => faker.number.int({ min: 1, max: 100 }),
-            Integer: () => faker.number.int({ min: 1, max: 100 }),
-            short: () => faker.number.int({ min: 1, max: 100 }),
-            Short: () => faker.number.int({ min: 1, max: 100 }),
-            long: () => faker.number.int({ min: 1, max: 10000 }),
-            Long: () => faker.number.int({ min: 1, max: 10000 }),
-            byte: () => faker.number.int({ min: 0, max: 127 }),
-            Byte: () => faker.number.int({ min: 0, max: 127 }),
-            float: () => parseFloat(faker.number.float({ min: 0, max: 1000, fractionDigits: 2 })),
-            Float: () => parseFloat(faker.number.float({ min: 0, max: 1000, fractionDigits: 2 })),
-            double: () => parseFloat(faker.number.float({ min: 0, max: 1000, fractionDigits: 2 })),
-            Double: () => parseFloat(faker.number.float({ min: 0, max: 1000, fractionDigits: 2 })),
-            BigDecimal: () =>
-                parseFloat(faker.number.float({ min: 0, max: 10000, fractionDigits: 2 })),
-            BigInteger: () => faker.number.int({ min: 1, max: 1000000 }),
-            boolean: () => faker.datatype.boolean(),
-            Boolean: () => faker.datatype.boolean(),
-            Date: () => faker.date.recent().toISOString(),
-            LocalDate: () => faker.date.recent().toISOString().split('T')[0],
-            LocalDateTime: () => faker.date.recent().toISOString().replace('Z', ''),
-            ZonedDateTime: () => faker.date.recent().toISOString(),
-            Instant: () => faker.date.recent().toISOString(),
-            Timestamp: () => faker.date.recent().toISOString(),
-            UUID: () => faker.string.uuid(),
-            Object: () => ({}),
-        };
-
-        if (typeGenerators[baseType]) {
-            return typeGenerators[baseType]();
+    objectExample(schema, schemas, visitedRefs, depth) {
+        if (schema.properties) {
+            const result = {};
+            for (const [name, propSchema] of Object.entries(schema.properties)) {
+                result[name] = this.fromSchema(propSchema, schemas, name, visitedRefs, depth + 1);
+            }
+            return result;
         }
 
-        if (javaType.match(/List<|ArrayList<|Set<|Collection</)) {
-            const innerType = this.extractGenericType(javaType);
-            return [
-                this.generateForType(innerType, fieldName),
-                this.generateForType(innerType, fieldName),
-            ];
+        if (schema.additionalProperties && typeof schema.additionalProperties === 'object') {
+            return {
+                key: this.fromSchema(
+                    schema.additionalProperties,
+                    schemas,
+                    '',
+                    visitedRefs,
+                    depth + 1,
+                ),
+            };
         }
 
-        if (javaType.match(/Map<|HashMap</)) {
-            return { key1: 'value1', key2: 'value2' };
+        return {};
+    }
+
+    stringExample(schema, fieldName) {
+        switch (schema.format) {
+            case 'uuid':
+                return faker.string.uuid();
+            case 'email':
+                return faker.internet.email().toLowerCase();
+            case 'date':
+                return this.isoDate().slice(0, 10);
+            case 'date-time':
+                return this.isoDate();
+            case 'time':
+                return '14:30:00';
+            case 'uri':
+            case 'url':
+                return 'https://example.com/resource';
+            case 'binary':
+                return '<binary content>';
+            case 'byte':
+                return 'ZXhhbXBsZQ==';
+            case 'password':
+                return faker.internet.password({ length: 12 });
+            default:
+                break;
         }
 
-        if (javaType.startsWith('ResponseEntity<') || javaType.startsWith('Optional<')) {
-            const innerType = this.extractGenericType(javaType);
-            return this.generateForType(innerType, fieldName);
+        let value = this.stringFromFieldName(fieldName);
+        if (value === null) {
+            value = faker.lorem.word();
         }
+
+        if (schema.minLength && value.length < schema.minLength) {
+            value = value.padEnd(schema.minLength, 'a');
+        }
+        if (schema.maxLength && value.length > schema.maxLength) {
+            value = value.slice(0, schema.maxLength);
+        }
+
+        return value;
+    }
+
+    /**
+     * Name-based hints, applied only to plain strings — never overrides
+     * declared types or formats.
+     */
+    stringFromFieldName(fieldName) {
+        if (!fieldName) {
+            return null;
+        }
+        const name = fieldName.toLowerCase();
+
+        if (/e?mail/.test(name)) return faker.internet.email().toLowerCase();
+        if (/^first.?name$/.test(name)) return faker.person.firstName();
+        if (/^last.?name|surname$/.test(name)) return faker.person.lastName();
+        if (/user.?name|login/.test(name)) return faker.internet.userName().toLowerCase();
+        if (/(^|_)name$|display.?name|full.?name/.test(name)) return faker.person.fullName();
+        if (/phone|mobile|celular/.test(name)) return faker.phone.number();
+        if (/password|senha/.test(name)) return faker.internet.password({ length: 12 });
+        if (/city|cidade/.test(name)) return faker.location.city();
+        if (/country|pais/.test(name)) return faker.location.country();
+        if (/street|address|endereco/.test(name)) return faker.location.streetAddress();
+        if (/zip|postal|cep/.test(name)) return faker.location.zipCode();
+        if (/url|link|website/.test(name)) return 'https://example.com';
+        if (/description|note|comment|descricao/.test(name)) return faker.lorem.sentence();
+        if (/title|subject|titulo/.test(name)) return faker.lorem.words(3);
+        if (/token|secret|key$/.test(name)) return faker.string.alphanumeric(24);
+        if (/code|codigo|sku|slug/.test(name)) return faker.string.alphanumeric(8).toLowerCase();
+        if (/currency|moeda/.test(name)) return 'USD';
 
         return null;
     }
 
-    generateStringValue(fieldName) {
-        for (const { pattern, generator } of this.fieldPatterns) {
-            if (pattern.test(fieldName)) {
-                return generator();
-            }
-        }
-        return faker.lorem.word();
+    integerExample(schema) {
+        const min = schema.minimum !== undefined ? Math.ceil(schema.minimum) : 1;
+        const max =
+            schema.maximum !== undefined
+                ? Math.floor(schema.maximum)
+                : Math.max(min + 99, min);
+        return faker.number.int({ min, max });
     }
 
-    extractGenericType(javaType) {
-        const match = javaType.match(/<(.+)>/);
-        return match ? match[1].trim() : 'Object';
+    numberExample(schema) {
+        const min = schema.minimum !== undefined ? schema.minimum : 0;
+        const max = schema.maximum !== undefined ? schema.maximum : Math.max(min + 999, min);
+        const value = faker.number.float({ min, max, fractionDigits: 2 });
+        return value;
     }
 
-    generateDtoExample(dtoName, fields) {
-        const example = {};
-
-        if (dtoName.toLowerCase().includes('user')) {
-            example.id = faker.number.int({ min: 1, max: 1000 });
-            example.name = faker.person.fullName();
-            example.email = faker.internet.email();
-        }
-
-        for (const field of fields || []) {
-            if (!example[field.name]) {
-                example[field.name] = this.generateForField(field.name, field.type);
-            }
-        }
-
-        return example;
-    }
-
-    generateRequestExample(dtoName, fields, _method) {
-        const example = this.generateDtoExample(dtoName, fields);
-
-        if (_method === 'POST' || _method === 'PUT') {
-            delete example.id;
-            delete example.createdAt;
-            delete example.updatedAt;
-        }
-
-        return example;
-    }
-
-    generateResponseExample(dtoName, fields, _method) {
-        const example = this.generateDtoExample(dtoName, fields);
-
-        if (!example.id) {
-            example.id = faker.number.int({ min: 1, max: 1000 });
-        }
-        if (!example.createdAt) {
-            example.createdAt = faker.date.recent().toISOString();
-        }
-
-        return example;
-    }
-
-    generateListResponse(dtoName, fields, count = 2) {
-        return Array.from({ length: count }, () =>
-            this.generateResponseExample(dtoName, fields, 'GET'),
-        );
-    }
-
-    generateErrorResponse(status, message, path) {
-        return {
-            timestamp: new Date().toISOString(),
-            status,
-            error: this.getErrorName(status),
-            message,
-            path,
-        };
-    }
-
-    getErrorName(status) {
-        const errors = {
-            400: 'Bad Request',
-            401: 'Unauthorized',
-            403: 'Forbidden',
-            404: 'Not Found',
-            409: 'Conflict',
-            422: 'Unprocessable Entity',
-            500: 'Internal Server Error',
-        };
-        return errors[status] || 'Error';
+    /**
+     * Deterministic under seed: generated via faker, never `new Date()`.
+     */
+    isoDate() {
+        const date = faker.date.between({
+            from: '2024-01-01T00:00:00.000Z',
+            to: '2025-12-31T23:59:59.000Z',
+        });
+        return date.toISOString();
     }
 }
 
-module.exports = MockDataGenerator;
+module.exports = ExampleGenerator;

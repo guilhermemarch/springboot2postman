@@ -2,33 +2,26 @@ const path = require('path');
 const { glob } = require('glob');
 const { isFile, pathExists } = require('../../lib/file-utils');
 
-const OPENAPI_FILENAMES = [
-    'openapi.json',
-    'openapi.yaml',
-    'openapi.yml',
-    'swagger.json',
-    'swagger.yaml',
-    'swagger.yml',
-];
+const SPEC_BASENAMES = ['openapi', 'swagger', 'api-docs', 'api-spec'];
+const SPEC_EXTENSIONS = ['json', 'yaml', 'yml'];
+
+const OPENAPI_FILENAMES = SPEC_BASENAMES.flatMap((base) =>
+    SPEC_EXTENSIONS.map((ext) => `${base}.${ext}`),
+);
+
+/**
+ * Searched in order; the first match (sorted for determinism) wins.
+ * Covers springdoc-maven-plugin output (target/), Gradle (build/), docs
+ * folders and multi-module resources.
+ */
+const SPEC_FILE_GLOB = `{${SPEC_BASENAMES.join(',')}}.{${SPEC_EXTENSIONS.join(',')}}`;
 
 const OPENAPI_GLOB_PATTERNS = [
-    'openapi.json',
-    'openapi.yaml',
-    'openapi.yml',
-    'swagger.json',
-    'swagger.yaml',
-    'swagger.yml',
-    'src/main/resources/**/openapi.json',
-    'src/main/resources/**/openapi.yaml',
-    'src/main/resources/**/openapi.yml',
-    'src/main/resources/**/swagger.json',
-    'src/main/resources/**/swagger.yaml',
-    'src/main/resources/**/swagger.yml',
-    'src/main/resources/static/**/openapi.json',
-    'src/main/resources/static/**/swagger.json',
-    'docs/**/openapi.json',
-    'docs/**/openapi.yaml',
-    'docs/**/swagger.json',
+    SPEC_FILE_GLOB,
+    `src/main/resources/**/${SPEC_FILE_GLOB}`,
+    `{docs,doc,api,spec,specs,contracts}/**/${SPEC_FILE_GLOB}`,
+    `{target,build}/${SPEC_FILE_GLOB}`,
+    `*/src/main/resources/**/${SPEC_FILE_GLOB}`,
 ];
 
 function isOpenApiFile(filepath) {
@@ -48,17 +41,15 @@ async function findOpenApiSpec(projectPath) {
         return null;
     }
 
-    for (const filename of OPENAPI_FILENAMES) {
-        const filepath = path.join(projectPath, filename);
-        if (await isFile(filepath)) {
-            return filepath;
-        }
-    }
-
     for (const pattern of OPENAPI_GLOB_PATTERNS) {
-        const matches = await glob(path.join(projectPath, pattern), { nodir: true });
+        const matches = await glob(pattern, {
+            cwd: projectPath,
+            nodir: true,
+            absolute: true,
+            windowsPathsNoEscape: true,
+        });
         if (matches.length > 0) {
-            return matches[0];
+            return matches.sort()[0];
         }
     }
 

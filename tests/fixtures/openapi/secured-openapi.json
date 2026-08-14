@@ -1,0 +1,50 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "Secured API",
+        "version": "1.0.0",
+        "description": "API protected by bearer tokens"
+    },
+    "servers": [{ "url": "https://api.example.com" }],
+    "security": [{ "bearerAuth": [] }],
+    "paths": {
+        "/items": {
+            "get": {
+                "summary": "List items",
+                "tags": ["Items"],
+                "operationId": "listItems",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": { "$ref": "#/components/schemas/Item" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT"
+            }
+        },
+        "schemas": {
+            "Item": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer", "format": "int64" },
+                    "name": { "type": "string" }
+                }
+            }
+        }
+    }
+}

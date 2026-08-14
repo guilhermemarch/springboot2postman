@@ -7,34 +7,51 @@ function getRequestPath(url) {
         return url;
     }
 
-    if (url.raw) {
-        return url.raw;
-    }
-
     if (url.path) {
         return `/${url.path.join('/')}`;
+    }
+
+    if (url.raw) {
+        return url.raw;
     }
 
     return '/';
 }
 
-function snapshotCollectionStructure(collection) {
-    const folders = (collection.item || []).map((folder) => ({
-        name: folder.name,
-        requests: (folder.item || []).map((item) => ({
+function snapshotItems(items = []) {
+    return items.map((item) => {
+        if (item.item) {
+            return {
+                folder: item.name,
+                items: snapshotItems(item.item),
+            };
+        }
+        return {
             name: item.name,
             method: item.request?.method,
             path: getRequestPath(item.request?.url),
             hasBody: Boolean(item.request?.body),
-            responseCount: item.response?.length || 0,
-        })),
-    }));
+            responses: (item.response || []).map((r) => `${r.code} ${r.name}`).sort(),
+        };
+    });
+}
+
+function snapshotCollectionStructure(collection) {
+    const items = snapshotItems(collection.item);
+
+    const countRequests = (nodes) =>
+        nodes.reduce(
+            (count, node) =>
+                node.items ? count + countRequests(node.items) : count + 1,
+            0,
+        );
 
     return {
         name: collection.info?.name,
+        auth: collection.auth?.type || null,
         variables: (collection.variable || []).map((entry) => entry.key).sort(),
-        folders,
-        requestCount: folders.reduce((count, folder) => count + folder.requests.length, 0),
+        items,
+        requestCount: countRequests(items),
     };
 }
 

@@ -1,64 +1,51 @@
-const { glob } = require('glob');
-const { readFile, isDirectory, pathExists } = require('../../lib/file-utils');
-const { ProjectNotFoundError, NoControllersFoundError } = require('../../lib/errors');
+const { readFile } = require('../../lib/file-utils');
+const { NoControllersFoundError } = require('../../lib/errors');
+
+/**
+ * Word-boundary matching: '@RestControllerAdvice' must NOT match, and
+ * imports (no leading '@') are never confused with usage.
+ */
+const CONTROLLER_PATTERN = /@(RestController|Controller)\b/;
 
 class ControllerScanner {
     constructor(logger) {
         this.logger = logger;
     }
 
-    async findControllers(projectPath, options = {}) {
-        this.logger.debug(`Scanning for controllers in: ${projectPath}`);
+    /**
+     * Find controller candidate files from an already-built SourceIndex
+     * (which only lists main sources, across all modules).
+     *
+     * @param {import('./source-index')} sourceIndex
+     * @param {object} options { include, exclude } comma-separated globs
+     * @returns {Promise<string[]>} absolute file paths
+     */
+    async findControllers(sourceIndex, options = {}) {
+        let files = this.applyFilters(sourceIndex.fileList, options);
 
-        if (!(await pathExists(projectPath))) {
-            throw new ProjectNotFoundError(projectPath);
-        }
-
-        if (!(await isDirectory(projectPath))) {
-            throw new ProjectNotFoundError(`${projectPath} is not a directory`);
-        }
-
-        const patterns = [
-            `${projectPath}/src/main/java/**/*Controller.java`,
-            `${projectPath}/src/main/java/**/*RestController.java`,
-            `${projectPath}/src/**/*.java`,
-        ];
-
-        const javaFiles = new Set();
-        for (const pattern of patterns) {
-            this.logger.debug(`Searching pattern: ${pattern}`);
-            const files = await glob(pattern, { nodir: true });
-            files.forEach((file) => javaFiles.add(file));
-            if (files.length > 0) {
-                this.logger.debug(`Found ${files.length} files with pattern`);
-            }
-        }
-
-        let javaFileList = [...javaFiles];
-
-        if (javaFileList.length === 0) {
-            throw new NoControllersFoundError(projectPath);
-        }
-
-        javaFileList = this.applyFilters(javaFileList, options);
-
-        this.logger.debug(
-            `Found ${javaFileList.length} Java files after filtering, checking for controllers...`,
-        );
+        this.logger.debug(`Scanning ${files.length} Java file(s) for controllers...`);
 
         const controllers = [];
-        for (const file of javaFileList) {
-            if (await this.isController(file)) {
-                controllers.push(file);
-                this.logger.debug(`✓ Controller: ${file}`);
+        for (const file of files) {
+            try {
+                const content = await readFile(file);
+                if (CONTROLLER_PATTERN.test(content)) {
+                    controllers.push(file);
+                    this.logger.debug(`Controller candidate: ${file}`);
+                }
+            } catch (error) {
+                this.logger.debug(`Failed to read ${file}: ${error.message}`);
             }
         }
 
         if (controllers.length === 0) {
-            throw new NoControllersFoundError(projectPath);
+            throw new NoControllersFoundError(
+                options.include || options.exclude
+                    ? 'no controllers matched the include/exclude filters'
+                    : undefined,
+            );
         }
 
-        this.logger.info(`Found ${controllers.length} controller(s)`);
         return controllers;
     }
 
@@ -66,63 +53,42 @@ class ControllerScanner {
         let filtered = files;
 
         if (options.include) {
-            const includePatterns = options.include.split(',').map((p) => p.trim());
+            const patterns = options.include.split(',').map((p) => p.trim()).filter(Boolean);
             filtered = filtered.filter((file) =>
-                includePatterns.some((pattern) => this.matchesPattern(file, pattern)),
+                patterns.some((pattern) => this.matchesPattern(file, pattern)),
             );
-            this.logger.debug(`Include filter applied: ${filtered.length} files remaining`);
+            this.logger.debug(`Include filter: ${filtered.length} file(s) remaining`);
         }
 
         if (options.exclude) {
-            const excludePatterns = options.exclude.split(',').map((p) => p.trim());
+            const patterns = options.exclude.split(',').map((p) => p.trim()).filter(Boolean);
             filtered = filtered.filter(
-                (file) => !excludePatterns.some((pattern) => this.matchesPattern(file, pattern)),
+                (file) => !patterns.some((pattern) => this.matchesPattern(file, pattern)),
             );
-            this.logger.debug(`Exclude filter applied: ${filtered.length} files remaining`);
+            this.logger.debug(`Exclude filter: ${filtered.length} file(s) remaining`);
         }
 
         return filtered;
     }
 
+    /**
+     * Glob-ish matching against the normalized (forward-slash) file path.
+     * All regex metacharacters are escaped so user input cannot break or
+     * inject into the pattern.
+     */
     matchesPattern(filepath, pattern) {
-        const regexPattern = pattern
-            .replace(/\./g, '\\.')
-            .replace(/\*\*/g, '{{DOUBLE_STAR}}')
+        const normalized = filepath.split('\\').join('/');
+        const escaped = pattern
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '\u0000')
             .replace(/\*/g, '[^/]*')
-            .replace(/\{\{DOUBLE_STAR\}\}/g, '.*');
+            .replace(/\u0000/g, '.*');
 
-        const regex = new RegExp(regexPattern);
-        return regex.test(filepath);
-    }
-
-    async isController(filepath) {
         try {
-            const content = await readFile(filepath);
-
-            const hasRestController = content.includes('@RestController');
-            const hasController = content.includes('@Controller');
-            const hasResponseBody = content.includes('@ResponseBody');
-            const hasRequestMapping = content.includes('@RequestMapping');
-
-            return hasRestController || (hasController && (hasResponseBody || hasRequestMapping));
-        } catch (error) {
-            this.logger.debug(`Failed to read ${filepath}: ${error.message}`);
+            return new RegExp(escaped).test(normalized);
+        } catch {
             return false;
         }
-    }
-
-    async getControllerInfo(filepath) {
-        const content = await readFile(filepath);
-        const lines = content.split('\n');
-
-        const classMatch = content.match(/class\s+(\w+)/);
-        const className = classMatch ? classMatch[1] : 'Unknown';
-
-        return {
-            filepath,
-            className,
-            lineCount: lines.length,
-        };
     }
 }
 
